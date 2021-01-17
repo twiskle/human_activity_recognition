@@ -1,0 +1,172 @@
+---
+title: "Practical Machine Learning [Coursera]: Human Activity Recognition"
+author: "Powell Chu"
+date: "01/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Executive Summary
+
+This project examines various human acitivties using data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, and the goal of this project is to create a model to classify the activities based on the data.
+
+More information can be found in this website:
+http://groupware.les.inf.puc-rio.br/har 
+
+### Data
+
+Training and testing data sets are provided to the course project for analysis. More information about the data set can be found in the following paper:
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6.
+
+
+```{r}
+#load datasets
+folderPath <- getwd()
+df_train <- read.csv(paste0(folderPath, '/Coursera/Course3_ML/pml-training.csv'))
+df_test <- read.csv(paste0(folderPath, '/Coursera/Course3_ML/pml-testing.csv'))
+
+dim(df_train)
+levels(df_train[,grepl("^classe", names(df_train))])
+```
+
+There are 19622 observations with 160 variables, including 'X' representing the index of each observation (at column 1), 'user_name' at column 2, and 'classe' (at column 160), a six-level classification representing the activity the user was performing (outcome).
+
+### Preprocessing
+
+Let's look at take a quick glance of the data:
+```{r, echo = T, results = 'hide'}
+summary(df_train)
+colSums(is.na(df_train)) #look at how many NAs in each column
+colSums(df_train == '')  #look at how many blank fields in each column
+```
+It seems there are some columns with quite alot of NAs and/or blank fields: Specifically, 19216 NAs out of 19622 observations. Thus, we ignore those columns.
+```{r, echo = T}
+#remove columns with number of NAs > 50% of the data
+updated_df_train <- df_train[, !(colSums(is.na(df_train)) / nrow(df_train) > 0.5) ]
+#remove columns with blanks > 50%
+updated_df_train <- updated_df_train[, !(colSums(updated_df_train == '') / nrow(updated_df_train) > 0.5) ]
+
+# dimension of dataset after removing (mostly) blank columns:
+dim(updated_df_train)
+names(updated_df_train)
+```
+Thus, we arrived at the 60 columns as listed above.
+
+```{r, echo = T, results = 'hide'}
+colSums(is.na(df_train)) #look at how many NAs in each column
+colSums(df_train == '')  #look at how many blank fields in each column
+```
+
+Another quick check of the remaining columns reveal that we don't have any NAs or blanks. Thus, we do not need to perform any imputations.
+
+
+#### Partition the data
+
+We partitioned *75%* of the Training dataset to be used for *training* the predictive model (the remaining *25%* for *testing*). The testing dataset is to be used for *validation* at the end after completing the model.
+
+```{r, echo = T, warning = F, message = F}
+library(caret);
+inTrain <- createDataPartition(y=updated_df_train$classe,
+                               p=0.75, list=FALSE)
+training <- updated_df_train[inTrain,]
+testing <- updated_df_train[-inTrain,]
+select_Columns <- names(updated_df_train)
+validate <- df_test[, which(names(df_train) %in% select_Columns) ]
+```
+
+Next, I exclude column1 (index number), column2 (username), and column60 (classe : outcome), and examine the remaining predictors, and we can see that some of them are factors, while most of the remaining parameters are numerics. Since the numeric parameters vary in different ranges, I have decided to perform standardization (both center and scale) on the numeric parameters.
+
+```{r, echo = T, results = 'hide'}
+## Standardization: only numeric columns:
+trainingExclude <- training[,-c(1,2,60)] #excluding X, user_name, and classe
+num_cols <- unlist(lapply(trainingExclude, is.numeric))
+
+preObj <- preProcess(trainingExclude[, num_cols], method=c("center","scale")) # a transformation OBJECT
+trainingS <- predict(preObj, trainingExclude)       # apply the transformation to training except the 3 columns
+
+#check that they are mean ~ 0 and sd = 1
+colMeans(trainingS[, num_cols])
+apply(trainingS[, num_cols], 2, sd)
+```
+
+
+### Model Creations
+
+We have looked into 3 machine learning algorithms: 1) Random Forest, 2) SVM Linear, and 3) Gradient Boosting. For all models, I performed 10-fold cross validation.
+
+#### Random Forest
+```{r, eval = T, echo = T, warning = F}
+trainingS$classe <- training$classe
+set.seed(32343)
+fitControl <- caret::trainControl(method = "cv", number = 10,
+                                  preProcOptions = list(thresh = 0.80))
+model1Fit <- caret::train(classe ~ ., data = trainingS, preProcess='pca', 
+                  method="rf", trControl = fitControl)
+
+# testing set: PreProcess, model fitting, and look at the confusion matrix
+testingS <- predict(preObj, testing[, -c(1,2,60)])
+testingS$classe <- testing$classe
+
+# look at accuracy
+pred1 <- predict(model1Fit, testingS)
+result_m1 <- length(which(pred1 == testing$classe))/length(testing$classe)
+print(paste0('overall accuracy of Model 1 [rf]: ', round(result_m1,4)))
+#confusionMatrix(testing$classe, predict(model1Fit, testingS))
+```
+
+#### Support Vector Machine (Linear)
+```{r, eval = T, echo = T}
+set.seed(32343)
+fitControl <- caret::trainControl(method = "cv", number = 10,
+                                  preProcOptions = list(thresh = 0.80))
+model2Fit <- caret::train(classe ~ ., data = trainingS, preProcess='pca', 
+                          method="svmLinear", trControl = fitControl)
+
+# testing set: PreProcess, model fitting, and look at the confusion matrix
+testingS <- predict(preObj, testing[, -c(1,2,60)])
+testingS$classe <- testing$classe
+
+# look at accuracy
+pred2 <- predict(model2Fit, testingS)
+result_m2 <- length(which(pred2 == testing$classe))/length(testing$classe)
+print(paste0('overall accuracy of Model 2 [svm]: ', round(result_m2,4)))
+#confusionMatrix(testing$classe, predict(model2Fit, testingS))
+```
+
+#### Gradient Boosting Machine
+```{r, eval = T, echo = T}
+set.seed(32343)
+fitControl <- caret::trainControl(method = "cv", number = 10,
+                                  preProcOptions = list(thresh = 0.80))
+model3Fit <- caret::train(classe ~ ., data = trainingS, preProcess='pca', 
+                          method="gbm", verbose = F, trControl = fitControl)
+
+# testing set: PreProcess, model fitting, and look at the confusion matrix
+testingS <- predict(preObj, testing[, -c(1,2,60)])
+testingS$classe <- testing$classe
+
+# look at accuracy
+pred3 <- predict(model3Fit, testingS)
+result_m3 <- length(which(pred3 == testing$classe))/length(testing$classe)
+print(paste0('overall accuracy of Model 3 [gbm]: ', round(result_m3,4)))
+#confusionMatrix(testing$classe, predict(model3Fit, testingS))
+```
+
+
+### Conclusion: Which model is better?
+
+From the results above, I have chosen Model 1 : Random Forest for my final model, since it has an accuracy of over 98%. The results of the validation set is as follows:
+
+```{r, eval = T, echo = T, results = 'show'}
+## Validation set: PreProcess, model fitting, and look at the confusion matrix
+validateS <- predict(preObj, validate[, -c(1,2,60)])
+validateS$problem_id <- validate$problem_id
+
+pred_v <- predict(model1Fit, validateS)
+result_validate_m1 <- data.frame('problem_id' = validate$problem_id,
+                                'prediction' = pred_v)
+print(result_validate_m1)
+```
